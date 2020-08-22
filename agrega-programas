@@ -1,0 +1,87 @@
+Para actualizar la versión base (0.3) se deberá ingresar:
+$>
+chroot $HOME/RIOTEC_LIVE/chroot
+
+
+Agregar programas (por ejemplo):
+$>
+apt install --no-install-recommends \
+    network-manager net-tools wireless-tools wpagui \
+    nano && \
+apt clean
+
+Salir de chroot
+$>
+exit
+
+
+Comprimir el entorno chroot dentro del Squash filesystem.
+$>
+sudo mksquashfs \
+    $HOME/RIOTEC_LIVE/chroot \
+    $HOME/RIOTEC_LIVE/staging/live/filesystem.squashfs \
+    -e boot
+    
+    
+Copiar el kernel e initramfs desde dentro del  chroot al directorio live.
+$>
+cp $HOME/RIOTEC_LIVE/chroot/boot/vmlinuz-* \
+    $HOME/RIOTEC_LIVE/staging/live/vmlinuz && \
+cp $HOME/RIOTEC_LIVE/chroot/boot/initrd.img-* \
+    $HOME/RIOTEC_LIVE/staging/live/initrd
+
+
+Copiamos dos archivos de arranque
+$>
+cp /usr/lib/ISOLINUX/isolinux.bin "${HOME}/RIOTEC_LIVE/staging/isolinux/" && \
+cp /usr/lib/syslinux/modules/bios/* "${HOME}/RIOTEC_LIVE/staging/isolinux/"
+
+
+Copiamos el EFI
+$>
+cp -r /usr/lib/grub/x86_64-efi/* "${HOME}/RIOTEC_LIVE/staging/boot/grub/x86_64-efi/"
+
+
+Creando el booteo EFI
+$>
+grub-mkstandalone \
+    --format=x86_64-efi \
+    --output=$HOME/RIOTEC_LIVE/tmp/bootx64.efi \
+    --locales="" \
+    --fonts="" \
+    "boot/grub/grub.cfg=$HOME/RIOTEC_LIVE/tmp/grub-standalone.cfg"
+
+
+Imagen UEFI FAT16 - EFI bootloader
+Ingresamos por terminal lo siguiente textual:
+$>
+(cd $HOME/RIOTEC_LIVE/staging/EFI/boot && \
+    dd if=/dev/zero of=efiboot.img bs=1M count=20 && \
+    mkfs.vfat efiboot.img && \
+    mmd -i efiboot.img efi efi/boot && \
+    mcopy -vi efiboot.img $HOME/RIOTEC_LIVE/tmp/bootx64.efi ::efi/boot/
+)
+
+
+Generando la .ISO
+$>
+xorriso \
+    -as mkisofs \
+    -iso-level 3 \
+    -o "${HOME}/RIOTEC_LIVE/riotec-live.iso" \
+    -full-iso9660-filenames \
+    -volid "RIOTEC_LIVE" \
+    -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+    -eltorito-boot \
+        isolinux/isolinux.bin \
+        -no-emul-boot \
+        -boot-load-size 4 \
+        -boot-info-table \
+        --eltorito-catalog isolinux/isolinux.cat \
+    -eltorito-alt-boot \
+        -e /EFI/boot/efiboot.img \
+        -no-emul-boot \
+        -isohybrid-gpt-basdat \
+    -append_partition 2 0xef ${HOME}/RIOTEC_LIVE/staging/EFI/boot/efiboot.img \
+    "${HOME}/RIOTEC_LIVE/staging"
+
