@@ -1,0 +1,202 @@
+Preparando el entorno “live”: En una máquina virtual instalar Ubuntu Mate. Ejecutar los siguientes comandos en modo superusuario.
+$>
+apt install debootstrap
+squashfs-tools \
+xorriso \
+isolinux \
+syslinux-efi \
+grub-pc-bin \
+grub-efi-amd64-bin \
+mtools
+
+creamos/directorio
+$>
+mkdir -p $HOME/RIOTEC_LIVE
+
+
+Descargamos debian base
+$>
+sudo debootstrap \
+    --arch=amd64 \
+    --variant=minbase \
+    buster \
+    $HOME/RIOTEC_LIVE/chroot \
+    http://ftp.us.debian.org/debian/
+
+
+Chroot al entorno Debian que recién bootstrapeamos (bootstrapped).
+$>
+sudo chroot $HOME/RIOTEC_LIVE/chroot
+
+[chroot] Setear un hostname para el entorno Debian.
+$>
+echo "riotec-live" > /etc/hostname
+
+[chroot] Determinar qué Linux Kernel queremos en el entorno “live”.
+$>
+apt-cache search linux-image
+
+[chroot] Elegimos linux-image-amd64. Será necesario además live-boot; systemd-sys (o su equivalente) también necesario para el init.
+$>
+apt update && \
+apt install --no-install-recommends \
+    linux-image-amd64 \
+    live-boot \
+    systemd-sysv
+    
+[chroot] Instalar programas elegidos, y ejecutar apt clean para ganar espacio. Usar --no-install-recommends para evitar paquetes superfluos.
+Por ejemplo:
+Un relativamente pequeño entorno:
+$>
+apt install --no-install-recommends \
+    network-manager net-tools wireless-tools wpagui \
+    curl openssh-client \
+    blackbox xserver-xorg-core xserver-xorg xinit xterm \
+    nano && \
+apt clean
+
+
+[chroot] Setear root password. root será el único user en el entorno “live”por defecto pero si se necesita, se pueden agregar más..
+$>
+passwd root
+
+[chroot] Salir chroot.
+$>
+exit
+
+***
+Crear directorios que contendrán los archivos para el entorno live (todo junto en una sola línea).
+$>
+mkdir -p $HOME/RIOTEC_LIVE/{staging/{EFI/boot,boot/grub/x86_64-efi,isolinux,live},tmp}
+
+Comprimir el entorno chroot dentro del Squash filesystem.
+$>
+sudo mksquashfs \
+    $HOME/RIOTEC_LIVE/chroot \
+    $HOME/RIOTEC_LIVE/staging/live/filesystem.squashfs \
+    -e boot
+
+Copiar el kernel e initramfs desde dentro del  chroot al directorio live.
+$>
+cp $HOME/RIOTEC_LIVE/chroot/boot/vmlinuz-* \
+    $HOME/RIOTEC_LIVE/staging/live/vmlinuz && \
+cp $HOME/RIOTEC_LIVE/chroot/boot/initrd.img-* \
+    $HOME/RIOTEC_LIVE/staging/live/initrd
+    
+***
+Preparar el arranque
+$>
+nano $HOME/RIOTEC_LIVE/staging/isolinux/isolinux.cfg
+
+MENU TITLE RIOTEC Live
+DEFAULT riotec
+TIMEOUT 600
+MENU RESOLUTION 640 480
+MENU COLOR border       30;44   #40ffffff #a0000000 std
+MENU COLOR title        1;36;44 #9033ccff #a0000000 std
+MENU COLOR sel          7;37;40 #e0ffffff #20ffffff all
+MENU COLOR unsel        37;44   #50ffffff #a0000000 std
+MENU COLOR help         37;40   #c0ffffff #a0000000 std
+MENU COLOR timeout_msg  37;40   #80ffffff #00000000 std
+MENU COLOR timeout      1;37;40 #c0ffffff #00000000 std
+MENU COLOR msg07        37;40   #90ffffff #a0000000 std
+MENU COLOR tabmsg       31;40   #30ffffff #00000000 std
+
+LABEL riotec
+  MENU LABEL RIOTEC Live [BIOS/ISOLINUX]
+  MENU DEFAULT
+  KERNEL /live/vmlinuz
+  APPEND initrd=/live/initrd boot=live
+
+LABEL riotec
+  MENU LABEL RIOTEC Live [BIOS/ISOLINUX] (drivers base)
+  MENU DEFAULT
+  KERNEL /live/vmlinuz
+  APPEND initrd=/live/initrd boot=live nomodeset
+
+Guardar en nano y salir
+**
+$>
+nano $HOME/RIOTEC_LIVE/staging/boot/grub/grub.cfg
+search --set=root --file /RIOTEC_LIVE
+
+set default="0"
+set timeout=30
+
+menuentry "RIOTEC Live [EFI/GRUB]" { 
+    linux ($root)/live/vmlinuz boot=live
+    initrd ($root)/live/initrd
+}
+
+menuentry "RIOTEC Live [EFI/GRUB] (drivers base)" {
+    linux ($root)/live/vmlinuz boot=live nomodeset
+    initrd ($root)/live/initrd
+}
+
+Guardar en nano y salir
+**
+$>
+nano $HOME/LIVE_BOOT/tmp/grub-standalone.cfg
+search --set=root --file /RIOTEC_LIVE
+set prefix=($root)/boot/grub/
+configfile /boot/grub/grub.cfg
+
+Guardar en nano y salir
+**
+$>
+touch $HOME/RIOTEC_LIVE/staging/RIOTEC_LIVE
+
+**
+Copiamos dos archivos de arranque
+$>
+cp /usr/lib/ISOLINUX/isolinux.bin "${HOME}/RIOTEC_LIVE/staging/isolinux/" && \
+cp /usr/lib/syslinux/modules/bios/* "${HOME}/RIOTEC_LIVE/staging/isolinux/"
+**
+Copiamos el EFI
+$>
+cp -r /usr/lib/grub/x86_64-efi/* "${HOME}/RIOTEC_LIVE/staging/boot/grub/x86_64-efi/"
+**
+Creando el booteo EFI
+$>
+grub-mkstandalone \
+    --format=x86_64-efi \
+    --output=$HOME/RIOTEC_LIVE/tmp/bootx64.efi \
+    --locales="" \
+    --fonts="" \
+    "boot/grub/grub.cfg=$HOME/RIOTEC_LIVE/tmp/grub-standalone.cfg"
+    
+**
+Imagen UEFI FAT16 - EFI bootloader
+Ingresamos por terminal lo siguiente textual:
+$>
+(cd $HOME/RIOTEC_LIVE/staging/EFI/boot && \
+    dd if=/dev/zero of=efiboot.img bs=1M count=20 && \
+    mkfs.vfat efiboot.img && \
+    mmd -i efiboot.img efi efi/boot && \
+    mcopy -vi efiboot.img $HOME/RIOTEC_LIVE/tmp/bootx64.efi ::efi/boot/
+)
+
+**
+Generando la .ISO
+$>
+xorriso \
+    -as mkisofs \
+    -iso-level 3 \
+    -o "${HOME}/RIOTEC_LIVE/riotec-live.iso" \
+    -full-iso9660-filenames \
+    -volid "RIOTEC_LIVE" \
+    -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+    -eltorito-boot \
+        isolinux/isolinux.bin \
+        -no-emul-boot \
+        -boot-load-size 4 \
+        -boot-info-table \
+        --eltorito-catalog isolinux/isolinux.cat \
+    -eltorito-alt-boot \
+        -e /EFI/boot/efiboot.img \
+        -no-emul-boot \
+        -isohybrid-gpt-basdat \
+    -append_partition 2 0xef ${HOME}/RIOTEC_LIVE/staging/EFI/boot/efiboot.img \
+    "${HOME}/RIOTEC_LIVE/staging"
+*****
+LISTO; PIM PAM PUM
